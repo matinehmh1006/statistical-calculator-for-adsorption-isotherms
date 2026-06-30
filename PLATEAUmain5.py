@@ -32,13 +32,17 @@ x2, y2 = x2[sorted_idx2], y2[sorted_idx2]
 X1 = sm.add_constant(x1)
 model1 = sm.OLS(y1, X1).fit()
 intercept_pval = model1.pvalues[0]
-slope_pval=model1.pvalues[1]
+t_slope = model1.tvalues[1]
+if t_slope > 0:
+    slope_pval = model1.pvalues[1] / 2
+else:
+    slope_pval = 1-model1.pvalues[1] / 2
 intercept = model1.params[0]
 slope = model1.params[1]
 
 # Plot
 x_vals1 = np.linspace(min(x1), max(x1), 100)
-x_vals2 = np.linspace(0, max(x1), 100)
+x_vals2 = np.linspace(0, max(x2), 100)
 fig, ax1 = plt.subplots(figsize=(10, 6))
 ax1.scatter(x1, y1, color='blue', label='Reference data')
 ax1.set_xlabel(r'$TOC \/\ (ppm)$')
@@ -49,13 +53,13 @@ ax1.grid(False)
 root = tk.Tk()
 root.withdraw()
 
-messagebox.showinfo("Step 1", "Testing if there is a meaningful relationship \nbetween signal and dosage..")
+messagebox.showinfo("Step 1", "Testing if there is a meaningful positive relationship \nbetween signal and dosage..")
 print("STEP 1: Testing slope of Line 1")
 print(f"Intercept = {slope:.4f}, p-value = {slope_pval:.4f}")
 
 if slope_pval < 0.05:
-    messagebox.showinfo("Step 1", f"Slope = {slope:.4f}, p-value = {slope_pval:.4f}.\nSlope is significantly different from zero,\nthere is a meaningful realtionshipe between signal and dosage. Proceeding...\nPress OK")
-    print("=> Slope is significantly different from zero. Proceeding...\n")
+    messagebox.showinfo("Step 1", f"Slope = {slope:.4f}, p-value = {slope_pval:.4f}.\nSlope is significantly larger than zero,\nthere is a meaningful realtionshipe between signal and dosage. Proceeding...\nPress OK")
+    print("=> Slope is significantly larger than zero. Proceeding...\n")
 
     messagebox.showinfo("Step 2", "Testing intercept of line 1...\nPress OK")
     print("STEP 2: Testing intercept of Line 1")
@@ -98,6 +102,8 @@ if slope_pval < 0.05:
         model_final = sm.WLS(y_comb, X_interact, weights=weights).fit()
         slope_diff_pval = model_final.pvalues[2]
 
+        messagebox.showinfo("Step 3", f"Testing if lines can be treated as parallel (equal slopes):\nPress OK")
+
         # --- PARALLELISM LOOP ---
         while slope_diff_pval <= 0.05 and len(x2) > 3:
 
@@ -130,12 +136,8 @@ if slope_pval < 0.05:
             slope_diff_pval = model_loop.pvalues[2]
             print(f"Retry parallelism test: slope diff p = {slope_diff_pval:.4f}, remaining points in Line2 = {len(x2)}")
         L=len(y3)
-        # === At this point, parallelism holds OR we failed ===
-        if slope_diff_pval > 0.05 and len(x2) >= 3:
 
-            # ------------------------------------------------------------------
-            #             VARIANCE MINIMIZATION LOOP (ALWAYS RUN)
-            # ------------------------------------------------------------------
+        if slope_diff_pval > 0.05 and len(x2) >= 3:
 
             def compute_variance(x2_test, y2_test, shared_slope):
                 """Compute variance of residuals around Line 2: y = slope*x + intercept2."""
@@ -145,18 +147,14 @@ if slope_pval < 0.05:
                 residuals_tmp = y2_test - (shared_slope * x2_test + intercept_tmp)
                 return np.var(residuals_tmp, ddof=1), intercept_tmp
 
-            # Compute initial shared slope first
             X_parallel_initial = np.column_stack([x_comb, G])
             model_parallel_initial = sm.WLS(y_comb, X_parallel_initial, weights=weights).fit()
             shared_slope = model_parallel_initial.params[0]
 
-            # Compute initial variance
             current_var, current_intercept2 = compute_variance(x2, y2, shared_slope)
             improvement = True
 
             while improvement and len(x2) > 3:
-
-                # Try removing next lowest-y point
                 test_x2 = x2[1:]
                 test_y2 = y2[1:]
 
@@ -164,7 +162,6 @@ if slope_pval < 0.05:
                 reduction = (current_var - test_var) / current_var
 
                 if reduction >= 0.01:
-                    # Accept removal
                     removed_x, removed_y = x2[0], y2[0]
                     x2, y2 = test_x2, test_y2
                     x3 = np.append(x3, removed_x)
@@ -174,12 +171,10 @@ if slope_pval < 0.05:
                 else:
                     improvement = False
 
-            # AFTER variance minimization, rebuild arrays
             x_comb = np.concatenate([x1, x2])
             y_comb = np.concatenate([y1, y2])
             G = np.concatenate([np.zeros_like(x1), np.ones_like(x2)])
 
-            # Final weights based on final dataset
             resid1 = y1 - slope * x1
             var1 = np.var(resid1, ddof=1)
             slope2_last = np.polyfit(x2, y2, 1)[0]
@@ -187,21 +182,22 @@ if slope_pval < 0.05:
             var2 = np.var(resid2, ddof=1)
             weights = np.concatenate([np.full_like(x1, 1 / var1), np.full_like(x2, 1 / var2)])
 
-            # --- Final Step 3: shared slope model ---
             X_parallel = np.column_stack([x_comb, G])
             model_parallel = sm.WLS(y_comb, X_parallel, weights=weights).fit()
 
             slope = model_parallel.params[0]
             intercept2 = model_parallel.params[1]
             slope_pval = model_parallel.pvalues[0]
-            intercept2_pval = model_parallel.pvalues[1]
+            t_intercept2 = model_parallel.tvalues[1]
+            if t_intercept2 > 0:
+                intercept2_pval = model_parallel.pvalues[1] / 2
+            else:
+                intercept2_pval = 1-model_parallel.pvalues[1] / 2
             intercept2_se = model_parallel.bse[1]
             F=len(y3)-L
 
-            #calculates CI, PI
-
             alpha = 0.05  # 95% interval
-            df_resid = model_parallel.df_resid 
+            df_resid = model_parallel.df_resid
 
             resid_comb = y_comb - model_parallel.predict(X_parallel)
             sigma2 = np.var(resid_comb, ddof=1)
@@ -219,41 +215,53 @@ if slope_pval < 0.05:
             CI_lower = intercept2 - t_val * se_pred / np.sqrt(n2)
             CI_upper = intercept2 + t_val * se_pred / np.sqrt(n2)
 
+            messagebox.showinfo(
+                "Step 3",
+                f"From the adsorption data:\n"
+                f"{L} Points removed using prallelism possibility check, and {F} points removed using minimization of the variance critera.\n"
+            )
             print(f"Prediction interval (single future point) for intercept: {PI_lower:.4f} to {PI_upper:.4f}")
             print(f"Confidence interval (true mean) for intercept: {CI_lower:.4f} to {CI_upper:.4f}")
 
             messagebox.showinfo(
                 "Step 3",
-                f"From the adsorption data:\n"
-                f"{L} Points removed using prallelism possibility check, and {F} points removed using minimization of the variance critera.\n"
-            )    
-            messagebox.showinfo("Step 4", f"Constrained model with shared slope and Line 2 intercept:\nShared lope β = {slope:.4e}, p = {slope_pval:.4e}.\nLine 2 intercept α₂ = {intercept2:.4f}, SE = {intercept2_se:.4f}, p = {intercept2_pval:.4e}.\nPrediction interval for intercept: {PI_lower:.4f} to {PI_upper:.4f}.\nConfidence interval for intercept: {CI_lower:.4f} to {CI_upper:.4f}.\nPress OK")
-            print("STEP 4: Constrained model with shared slope and Line 2 intercept:")
-            print(f"Shared slope β = {slope:.4e}, p = {slope_pval:.4e}")
-            print(f"Line 2 intercept α₂ = {intercept2:.4f}, SE = {intercept2_se:.4f}, p = {intercept2_pval:.4e}")
+                f"Slope difference (interaction term) p = {slope_diff_pval:.4f}:\n"
+                f"=> Not significant, lines can be treated as parallel.\n"
+                f"Press OK")    
             
+            messagebox.showinfo(
+                "Step 4",
+                f"Testing intercept of the adsorption line \n"
+                f"Press OK"
+            )
 
             if intercept2_pval<0.05:
-                messagebox.showinfo("Step 4", f"All statistical tests passed successfully!\nYour plot will be shown.\nPress OK")        
-                # === PLOT ===
+                messagebox.showinfo("Step 4", f"Intercept={intercept2:.4f}, p = {intercept2_pval:.4e}\n"
+                f"The intercept is significantly larger than zero\n"
+                f"Press OK"
+                )
+                messagebox.showinfo("Summary", f"Constrained model with shared slope and Line 2 intercept:\nShared lope β = {slope:.4e}, p = {slope_pval:.4e}.\nLine 2 intercept α₂ = {intercept2:.4f}, SE = {intercept2_se:.4f}, p = {intercept2_pval:.4e}.\nPrediction interval for intercept: {PI_lower:.4f} to {PI_upper:.4f}.\nConfidence interval for intercept: {CI_lower:.4f} to {CI_upper:.4f}.\nPress OK")
+                print("STEP 4: Constrained model with shared slope and Line 2 intercept:")
+                print(f"Shared slope β = {slope:.4e}, p = {slope_pval:.4e}")
+                print(f"Line 2 intercept α₂ = {intercept2:.4f}, SE = {intercept2_se:.4f}, p = {intercept2_pval:.4e}")
+
+                messagebox.showinfo("", f"All statistical tests passed successfully!\nYour plot will be shown.\nPress OK")        
                 y_fit1 = slope * x_vals1
                 y_fit2 = slope* x_vals2 + intercept2
 
-                # Primary Y-axis plots
                 ax1.plot(x_vals1, y_fit1, 'b--', label=f'Line 1: y = {slope:.3e}x')
                 ax1.scatter(x2, y2, color='red', label='Adsorption data')
                 ax1.scatter(x3, y3, facecolors='none', edgecolors='r', label='Adsorption data before saturation')
                 ax1.plot(x_vals2, y_fit2, 'r--', label=f'Line 2: y = {slope:.3e}x + {intercept2:.4f}')
-                #ax2.ax2.ax2
-                            
+
                 lines_1, labels_1 = ax1.get_legend_handles_labels()
                 ax1.legend(lines_1 , labels_1 , loc='best')
 
 
 
             else:
-                messagebox.showerror("Step 4", "=> the intercept of the adsorption line is not significantly different from zero.\nEnd of calculations. Your plot will be shown.\nPress OK")
-                print("=> the intercept of the adsorption line is not significantly different from zero")
+                messagebox.showerror("Step 4", "=> The intercept of the adsorption line is not significantly larger than zero.\nEnd of calculations. Your plot will be shown.\nPress OK")
+                print("=> the intercept of the adsorption line is not significantly larger than zero")
                 #intercept2=0
 
                 y_fit1 = slope * x_vals1
@@ -262,8 +270,6 @@ if slope_pval < 0.05:
                 ax1.scatter(x2, y2, color='red', label='Adsorption data')
                 ax1.scatter(x3, y3, facecolors='none', edgecolors='r', label='Adsorption data before saturation')
                 ax1.plot(x_vals2, y_fit2, 'r--', label=f'Line 2: y = {slope:.3e}x + {intercept2:.4f}')
-
-                # Legend
                 lines_1, labels_1 = ax1.get_legend_handles_labels()
                 ax1.legend(lines_1, labels_1, loc='best')
 
@@ -289,8 +295,8 @@ if slope_pval < 0.05:
         ax1.legend(loc='best')
     
 else:
-    messagebox.showerror("Step 1", f"Slope = {slope:.4f}, p-value = {slope_pval:.4f}.\nRef slope is NOT significantly different from zero.\nThere is no meaningful realtionship between signal and dosage.\nThe plot will show.\nPress OK")
-    print("=> Ref slope is NOT significantly different from zero. There is no meaningful realtionship between signal and dosage.")
+    messagebox.showerror("Step 1", f"Slope = {slope:.4f}, p-value = {slope_pval:.4f}.\nRef slope is NOT significantly larger than zero.\nThere is no meaningful realtionship between signal and dosage.\nThe plot will show.\nPress OK")
+    print("=> Ref slope is NOT significantly larger than zero. There is no meaningful realtionship between signal and dosage.")
     slope, intercept = np.polyfit(x1, y1, 1)
     y_fit1 = slope * x_vals1 + intercept
     ax1.plot(x_vals1, y_fit1, 'b--', label=f'Line 1: y = {slope:.3e}x+ {intercept:.4f}')
@@ -298,3 +304,4 @@ else:
 
 
 plt.show()
+
